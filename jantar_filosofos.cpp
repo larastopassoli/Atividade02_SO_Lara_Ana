@@ -10,32 +10,36 @@
 
 using namespace std;
 
-enum Estado { PENS, FOME, COME };
+enum Estado { PENS, FOME, COME }; //cria os estados possíveis
 
 int N;
 int duracao;
 int pensarMin, pensarMax;
 int comerMin, comerMax;
 
-vector<Estado> estados;
-vector<int> refeicoes;
-vector<pthread_t> threads;
-vector<pthread_cond_t> condicoes;
+vector<Estado> estados; //guarda o estado (PENS, FOME, COME)
+vector<int> refeicoes; //guarda quantas vezes cada um comeu
+vector<pthread_t> threads; //guarda as threads dos filósofos (Cada filósofo é uma thread)
+vector<pthread_cond_t> condicoes; //serve para fazer o filósofo esperar e acordar ele pra quando puder comer 
 
+// cria um mutex e inicia ele para que as threads não alterem os estado dos filósofos ao mesmo tempo
 pthread_mutex_t mutexMonitor = PTHREAD_MUTEX_INITIALIZER;
 
-bool simulacaoAtiva = true;
-chrono::steady_clock::time_point inicio;
+bool simulacaoAtiva = true; //controla quando o programa para
+chrono::steady_clock::time_point inicio; //guarda o inicio da simulação
 
+//transforma estado em texto para imprimir 
 string estadoTexto(Estado e) {
     if (e == PENS) return "PENS";
     if (e == FOME) return "FOME";
     return "COME";
 }
 
+//calcula o tempo decorrido desde o início da simulação
 string tempoAtual() {
-    auto agora = chrono::steady_clock::now();
-    auto ms = chrono::duration_cast<chrono::milliseconds>(agora - inicio).count();
+    auto agora = chrono::steady_clock::now(); //pega o tempo atual
+    auto ms = chrono::duration_cast<chrono::milliseconds>(agora - inicio).count(); //calcula quanto tempo desde que começou e converte para milissegundos
+
 
     int horas = ms / 3600000;
     ms %= 3600000;
