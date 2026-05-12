@@ -38,7 +38,8 @@ string estadoTexto(Estado e) {
 //calcula o tempo decorrido desde o início da simulação
 string tempoAtual() {
     auto agora = chrono::steady_clock::now(); //pega o tempo atual
-    auto ms = chrono::duration_cast<chrono::milliseconds>(agora - inicio).count(); //calcula quanto tempo desde que começou e converte para milissegundos
+    //calcula quanto tempo desde que começou e converte para milissegundos
+    auto ms = chrono::duration_cast<chrono::milliseconds>(agora - inicio).count(); 
 
 
     int horas = ms / 3600000;
@@ -55,27 +56,28 @@ string tempoAtual() {
        << setw(3) << milissegundos << "]";
     return ss.str();
 }
-
+//retorna o garfo da esquerda do filosofo
 int esquerda(int i) {
     return i;
 }
-
+// Retorna o garfo da direita 
 int direita(int i) {
     return (i + 1) % N;
 }
-
+// Retorna o filósofo sentado à esquerda
 int vizinhoEsquerda(int i) {
     return (i + N - 1) % N;
 }
-
+// Retorna o filósofo sentado à direita
 int vizinhoDireita(int i) {
     return (i + 1) % N;
 }
 
+//verifica se o filósofo pode comer 
 bool podeComer(int i) {
-    return estados[i] == FOME &&
-           estados[vizinhoEsquerda(i)] != COME &&
-           estados[vizinhoDireita(i)] != COME;
+    return estados[i] == FOME && //verifica se o filósofo está com fome
+           estados[vizinhoEsquerda(i)] != COME && //verifica se o viziho da esquerda não está comendo
+           estados[vizinhoDireita(i)] != COME; //verifica se o vizinho da direira não está comendo
 }
 
 void imprimirEvento(int id, Estado antigo, Estado novoEstado) {
