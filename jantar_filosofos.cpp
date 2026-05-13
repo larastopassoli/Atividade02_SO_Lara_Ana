@@ -7,6 +7,7 @@
 #include <sstream>
 #include <fstream>
 #include <cstdlib>
+#include <ctime>
 
 using namespace std;
 
@@ -28,6 +29,13 @@ pthread_mutex_t mutexMonitor = PTHREAD_MUTEX_INITIALIZER;
 bool simulacaoAtiva = true; //controla quando o programa para
 chrono::steady_clock::time_point inicio; //guarda o inicio da simulação
 
+//verifica se o tempo total da simulação já acabou
+bool tempoEsgotado() {
+    auto agora = chrono::steady_clock::now();
+    auto ms = chrono::duration_cast<chrono::milliseconds>(agora - inicio).count();
+    return ms >= duracao * 1000;
+}
+
 //transforma estado em texto para imprimir 
 string estadoTexto(Estado e) {
     if (e == PENS) return "PENS";
@@ -41,6 +49,9 @@ string tempoAtual() {
     //calcula quanto tempo desde que começou e converte para milissegundos
     auto ms = chrono::duration_cast<chrono::milliseconds>(agora - inicio).count(); 
 
+    if (ms > duracao * 1000) {
+        ms = duracao * 1000;
+    }
 
     int horas = ms / 3600000;
     ms %= 3600000;
@@ -56,18 +67,22 @@ string tempoAtual() {
        << setw(3) << milissegundos << "]";
     return ss.str();
 }
+
 //retorna o garfo da esquerda do filosofo
 int esquerda(int i) {
     return i;
 }
+
 // Retorna o garfo da direita 
 int direita(int i) {
     return (i + 1) % N;
 }
+
 // Retorna o filósofo sentado à esquerda
 int vizinhoEsquerda(int i) {
     return (i + N - 1) % N;
 }
+
 // Retorna o filósofo sentado à direita
 int vizinhoDireita(int i) {
     return (i + 1) % N;
@@ -80,7 +95,12 @@ bool podeComer(int i) {
            estados[vizinhoDireita(i)] != COME; //verifica se o vizinho da direira não está comendo
 }
 
+//A função imprimirEvento é responsável por exibir cada mudança importante da simulação
 void imprimirEvento(int id, Estado antigo, Estado novoEstado) {
+    if (tempoEsgotado()) {
+        return;
+    }
+
     cout << tempoAtual() << " F" << id << ": "
          << estadoTexto(antigo) << " -> " << estadoTexto(novoEstado) << endl;
 
@@ -115,17 +135,38 @@ void imprimirEvento(int id, Estado antigo, Estado novoEstado) {
     cout << "------------------------------------------------------------" << endl;
 }
 
+//Ela gera um número aleatório (tempo de pensar ou comer) entre o mínimo e o máximo
 int aleatorioEntre(int minimo, int maximo, unsigned int &seed) {
     return minimo + rand_r(&seed) % (maximo - minimo + 1);
 }
 
-void mudarEstado(int id, Estado novoEstado) {
-    Estado antigo = estados[id];
-    estados[id] = novoEstado;
-    imprimirEvento(id, antigo, novoEstado);
+//faz uma espera em pequenos pedaços, parando se o tempo da simulação acabar
+void esperarComControle(int tempoMs) {
+    int tempoPassado = 0;
+
+    while (simulacaoAtiva && !tempoEsgotado() && tempoPassado < tempoMs) {
+        int pedaco = 50;
+
+        if (tempoMs - tempoPassado < pedaco) {
+            pedaco = tempoMs - tempoPassado;
+        }
+
+        usleep(pedaco * 1000);
+        tempoPassado += pedaco;
+    }
+}
+
+void mudarEstado(int id, Estado novoEstado) { //altera o estado 
+    Estado antigo = estados[id]; //guarda o estado antigo 
+    estados[id] = novoEstado; //atualiza o estado atual do filósofo
+    imprimirEvento(id, antigo, novoEstado); //mostra a mudança de estado
 }
 
 void testarFilosofo(int id) {
+    if (!simulacaoAtiva || tempoEsgotado()) {
+        return;
+    }
+
     if (podeComer(id)) {
         mudarEstado(id, COME);
         refeicoes[id]++;
@@ -133,18 +174,27 @@ void testarFilosofo(int id) {
     }
 }
 
-void pegarGarfos(int id) {
+bool pegarGarfos(int id) {
     pthread_mutex_lock(&mutexMonitor);
+
+    if (!simulacaoAtiva || tempoEsgotado()) {
+        pthread_mutex_unlock(&mutexMonitor);
+        return false;
+    }
 
     mudarEstado(id, FOME);
 
     testarFilosofo(id);
 
-    while (simulacaoAtiva && estados[id] != COME) {
+    while (simulacaoAtiva && !tempoEsgotado() && estados[id] != COME) {
         pthread_cond_wait(&condicoes[id], &mutexMonitor);
     }
 
+    bool conseguiuComer = simulacaoAtiva && !tempoEsgotado() && estados[id] == COME;
+
     pthread_mutex_unlock(&mutexMonitor);
+
+    return conseguiuComer;
 }
 
 void soltarGarfos(int id) {
@@ -164,18 +214,18 @@ void* rotinaFilosofo(void* arg) {
 
     unsigned int seed = time(nullptr) + id * 100;
 
-    while (simulacaoAtiva) {
+    while (simulacaoAtiva && !tempoEsgotado()) {
         int tempoPensando = aleatorioEntre(pensarMin, pensarMax, seed);
-        usleep(tempoPensando * 1000);
+        esperarComControle(tempoPensando);
 
-        if (!simulacaoAtiva) break;
+        if (!simulacaoAtiva || tempoEsgotado()) break;
 
-        pegarGarfos(id);
+        bool conseguiuPegar = pegarGarfos(id);
 
-        if (!simulacaoAtiva) break;
+        if (!conseguiuPegar || !simulacaoAtiva || tempoEsgotado()) break;
 
         int tempoComendo = aleatorioEntre(comerMin, comerMax, seed);
-        usleep(tempoComendo * 1000);
+        esperarComControle(tempoComendo);
 
         soltarGarfos(id);
     }
@@ -203,13 +253,13 @@ bool lerArquivo(string nomeArquivo) {
 
 void imprimirResumoFinal() {
     cout << endl;
-    cout << "================ RESUMO FINAL ================" << endl;
+    cout << " RESUMO FINAL " << endl;
 
     for (int i = 0; i < N; i++) {
         cout << "Filósofo F" << i << " comeu " << refeicoes[i] << " vezes." << endl;
     }
 
-    cout << "==============================================" << endl;
+    cout << "----------------------------------------" << endl;
 }
 
 int main(int argc, char* argv[]) {
@@ -256,7 +306,9 @@ int main(int argc, char* argv[]) {
         pthread_create(&threads[i], nullptr, rotinaFilosofo, id);
     }
 
-    sleep(duracao);
+    while (!tempoEsgotado()) {
+        usleep(1000);
+    }
 
     pthread_mutex_lock(&mutexMonitor);
     simulacaoAtiva = false;
@@ -281,3 +333,5 @@ int main(int argc, char* argv[]) {
 
     return 0;
 }
+//g++ jantar_filosofos.cpp -o filosofos -pthread
+//./filosofos entrada_filosofos.txt

@@ -1,6 +1,11 @@
-5
-10
-500
-1500
-500
-2000
+7
+8
+300
+1000
+400
+1200
+
+//7 filósofos
+//8 segundos de simulação
+//pensar entre 300 e 1000 ms
+//comer entre 400 e 1200 ms

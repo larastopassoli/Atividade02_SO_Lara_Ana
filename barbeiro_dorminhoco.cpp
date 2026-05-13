@@ -4,81 +4,104 @@
 #include <vector>
 #include <unistd.h>
 #include <chrono>
-#include <random>
 #include <iomanip>
 #include <sstream>
+#include <cstdlib>
+#include <ctime>
 
 using namespace std;
 
 int cadeiras;
 int chegadaMin, chegadaMax;
 int atendimentoMin, atendimentoMax;
-int duracaoSimulacao;
+int duracao;
 
-bool simulando = true;
+queue<int> filaClientes;
 
 int clientesAtendidos = 0;
 int clientesDesistentes = 0;
-int proximoCliente = 1;
+int totalClientesGerados = 0;
 
-string estadoBarbeiro = "DORME";
+bool simulacaoAtiva = true;
+bool barbeiroAtendendo = false;
 int clienteAtual = -1;
 
-queue<int> filaClientes;
-vector<pthread_t> threadsClientes;
+pthread_mutex_t mutexBarbearia = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t condCliente = PTHREAD_COND_INITIALIZER;
 
-pthread_mutex_t mutexFila = PTHREAD_MUTEX_INITIALIZER;
-pthread_cond_t clienteChegou = PTHREAD_COND_INITIALIZER;
+pthread_t threadBarbeiro;
+pthread_t threadGerador;
 
-chrono::steady_clock::time_point inicioSimulacao;
+chrono::steady_clock::time_point inicio;
 
-int numeroAleatorio(int min, int max) {
-    static random_device rd;
-    static mt19937 gen(rd());
-    uniform_int_distribution<> dist(min, max);
-    return dist(gen);
+// Verifica se o tempo da simulação acabou
+bool tempoEsgotado() {
+    auto agora = chrono::steady_clock::now();
+    auto ms = chrono::duration_cast<chrono::milliseconds>(agora - inicio).count();
+    return ms >= duracao * 1000;
 }
 
+// Formata o tempo no padrão HH:MM:SS.mmm
 string tempoAtual() {
     auto agora = chrono::steady_clock::now();
-    auto diff = chrono::duration_cast<chrono::milliseconds>(agora - inicioSimulacao).count();
+    auto ms = chrono::duration_cast<chrono::milliseconds>(agora - inicio).count();
 
-    int horas = diff / 3600000;
-    diff %= 3600000;
+    if (ms > duracao * 1000) {
+        ms = duracao * 1000;
+    }
 
-    int minutos = diff / 60000;
-    diff %= 60000;
-
-    int segundos = diff / 1000;
-    int milissegundos = diff % 1000;
+    int horas = ms / 3600000;
+    ms %= 3600000;
+    int minutos = ms / 60000;
+    ms %= 60000;
+    int segundos = ms / 1000;
+    int milissegundos = ms % 1000;
 
     stringstream ss;
-    ss << "["
-       << setfill('0') << setw(2) << horas << ":"
-       << setfill('0') << setw(2) << minutos << ":"
-       << setfill('0') << setw(2) << segundos << "."
-       << setfill('0') << setw(3) << milissegundos
-       << "]";
+    ss << "[" << setfill('0') << setw(2) << horas << ":"
+       << setw(2) << minutos << ":"
+       << setw(2) << segundos << "."
+       << setw(3) << milissegundos << "]";
 
     return ss.str();
 }
 
+// Gera número aleatório entre mínimo e máximo
+int aleatorioEntre(int minimo, int maximo, unsigned int &seed) {
+    return minimo + rand_r(&seed) % (maximo - minimo + 1);
+}
+
+// Espera em pequenos intervalos para conseguir parar quando o tempo acabar
+void esperarComControle(int tempoMs) {
+    int tempoPassado = 0;
+
+    while (simulacaoAtiva && !tempoEsgotado() && tempoPassado < tempoMs) {
+        int pedaco = 50;
+
+        if (tempoMs - tempoPassado < pedaco) {
+            pedaco = tempoMs - tempoPassado;
+        }
+
+        usleep(pedaco * 1000);
+        tempoPassado += pedaco;
+    }
+}
+
+// Imprime a situação atual da fila
 void imprimirFila() {
     queue<int> copia = filaClientes;
 
     cout << "Fila: [";
 
-    int ocupadas = filaClientes.size();
-
     for (int i = 0; i < cadeiras; i++) {
-        if (i < ocupadas) {
+        if (i < (int)filaClientes.size()) {
             cout << "#";
         } else {
             cout << ".";
         }
     }
 
-    cout << "] (" << ocupadas << "/" << cadeiras << ") -> ";
+    cout << "] (" << filaClientes.size() << "/" << cadeiras << ") -> ";
 
     while (!copia.empty()) {
         cout << "C" << copia.front() << " ";
@@ -88,10 +111,15 @@ void imprimirFila() {
     cout << endl;
 }
 
-void imprimirEvento(const string& evento) {
+// Imprime cada evento importante da simulação
+void imprimirEvento(string evento) {
+    if (tempoEsgotado()) {
+        return;
+    }
+
     cout << tempoAtual() << " " << evento << endl;
 
-    if (estadoBarbeiro == "ATENDE") {
+    if (barbeiroAtendendo) {
         cout << "Barbeiro: ATENDE C" << clienteAtual << endl;
     } else {
         cout << "Barbeiro: DORME" << endl;
@@ -101,78 +129,98 @@ void imprimirEvento(const string& evento) {
 
     cout << "Contadores: atendidos=" << clientesAtendidos
          << " | desistentes=" << clientesDesistentes
-         << " | em_espera=" << filaClientes.size()
-         << endl;
+         << " | em_espera=" << filaClientes.size() << endl;
 
     cout << "------------------------------------------------------------" << endl;
 }
 
-void* funcaoCliente(void* arg) {
-    int id = *((int*)arg);
-    delete (int*)arg;
+// Thread do barbeiro
+void* rotinaBarbeiro(void* arg) {
+    unsigned int seed = time(nullptr) + 200;
 
-    pthread_mutex_lock(&mutexFila);
+    while (simulacaoAtiva && !tempoEsgotado()) {
+        pthread_mutex_lock(&mutexBarbearia);
 
-    if ((int)filaClientes.size() >= cadeiras) {
-        clientesDesistentes++;
-
-        imprimirEvento("Cliente C" + to_string(id) + " chegou, mas desistiu por falta de cadeira");
-    } else {
-        filaClientes.push(id);
-
-        imprimirEvento("Cliente C" + to_string(id) + " chegou e entrou na fila");
-
-        pthread_cond_signal(&clienteChegou);
-    }
-
-    pthread_mutex_unlock(&mutexFila);
-
-    return NULL;
-}
-
-void* funcaoBarbeiro(void* arg) {
-    while (true) {
-        pthread_mutex_lock(&mutexFila);
-
-        while (filaClientes.empty() && simulando) {
-            estadoBarbeiro = "DORME";
+        while (filaClientes.empty() && simulacaoAtiva && !tempoEsgotado()) {
+            barbeiroAtendendo = false;
             clienteAtual = -1;
-
             imprimirEvento("Barbeiro está dormindo, pois não há clientes");
-
-            pthread_cond_wait(&clienteChegou, &mutexFila);
+            pthread_cond_wait(&condCliente, &mutexBarbearia);
         }
 
-        if (!simulando && filaClientes.empty()) {
-            pthread_mutex_unlock(&mutexFila);
+        if (!simulacaoAtiva || tempoEsgotado()) {
+            pthread_mutex_unlock(&mutexBarbearia);
             break;
         }
 
-        int cliente = filaClientes.front();
+        clienteAtual = filaClientes.front();
         filaClientes.pop();
+        barbeiroAtendendo = true;
 
-        estadoBarbeiro = "ATENDE";
-        clienteAtual = cliente;
+        imprimirEvento("Barbeiro iniciou atendimento do cliente C" + to_string(clienteAtual));
 
-        imprimirEvento("Barbeiro iniciou atendimento do cliente C" + to_string(cliente));
+        pthread_mutex_unlock(&mutexBarbearia);
 
-        pthread_mutex_unlock(&mutexFila);
+        int tempoAtendimento = aleatorioEntre(atendimentoMin, atendimentoMax, seed);
+        esperarComControle(tempoAtendimento);
 
-        int tempoAtendimento = numeroAleatorio(atendimentoMin, atendimentoMax);
-        usleep(tempoAtendimento * 1000);
+        pthread_mutex_lock(&mutexBarbearia);
 
-        pthread_mutex_lock(&mutexFila);
+        if (!tempoEsgotado()) {
+            clientesAtendidos++;
+            barbeiroAtendendo = false;
+            imprimirEvento("Barbeiro concluiu atendimento do cliente C" + to_string(clienteAtual));
+        }
 
-        clientesAtendidos++;
-        estadoBarbeiro = "DORME";
         clienteAtual = -1;
 
-        imprimirEvento("Barbeiro concluiu atendimento do cliente C" + to_string(cliente));
-
-        pthread_mutex_unlock(&mutexFila);
+        pthread_mutex_unlock(&mutexBarbearia);
     }
 
-    return NULL;
+    return nullptr;
+}
+
+// Thread que gera clientes
+void* rotinaGeradorClientes(void* arg) {
+    unsigned int seed = time(nullptr) + 500;
+
+    while (simulacaoAtiva && !tempoEsgotado()) {
+        int tempoChegada = aleatorioEntre(chegadaMin, chegadaMax, seed);
+        esperarComControle(tempoChegada);
+
+        if (!simulacaoAtiva || tempoEsgotado()) {
+            break;
+        }
+
+        pthread_mutex_lock(&mutexBarbearia);
+
+        totalClientesGerados++;
+        int idCliente = totalClientesGerados;
+
+        if ((int)filaClientes.size() < cadeiras) {
+            filaClientes.push(idCliente);
+            imprimirEvento("Cliente C" + to_string(idCliente) + " chegou e entrou na fila");
+            pthread_cond_signal(&condCliente);
+        } else {
+            clientesDesistentes++;
+            imprimirEvento("Cliente C" + to_string(idCliente) + " chegou, mas desistiu por falta de cadeira");
+        }
+
+        pthread_mutex_unlock(&mutexBarbearia);
+    }
+
+    return nullptr;
+}
+
+// Mostra resumo final
+void imprimirResumoFinal() {
+    cout << endl;
+    cout << "================ RESUMO FINAL ================" << endl;
+    cout << "Clientes atendidos: " << clientesAtendidos << endl;
+    cout << "Clientes desistentes: " << clientesDesistentes << endl;
+    cout << "Clientes restantes na fila: " << filaClientes.size() << endl;
+    cout << "Total de clientes gerados: " << totalClientesGerados << endl;
+    cout << "==============================================" << endl;
 }
 
 int main() {
@@ -192,55 +240,35 @@ int main() {
     cin >> atendimentoMax;
 
     cout << "Digite a duracao total da simulacao em segundos: ";
-    cin >> duracaoSimulacao;
+    cin >> duracao;
 
-    inicioSimulacao = chrono::steady_clock::now();
-
-    pthread_t threadBarbeiro;
-    pthread_create(&threadBarbeiro, NULL, funcaoBarbeiro, NULL);
-
-    while (true) {
-        auto agora = chrono::steady_clock::now();
-        auto tempoPassado = chrono::duration_cast<chrono::seconds>(agora - inicioSimulacao).count();
-
-        if (tempoPassado >= duracaoSimulacao) {
-            break;
-        }
-
-        pthread_t threadCliente;
-
-        int* idCliente = new int;
-        *idCliente = proximoCliente++;
-
-        pthread_create(&threadCliente, NULL, funcaoCliente, idCliente);
-
-        threadsClientes.push_back(threadCliente);
-
-        int tempoChegada = numeroAleatorio(chegadaMin, chegadaMax);
-        usleep(tempoChegada * 1000);
+    if (cadeiras <= 0 || duracao <= 0 || chegadaMin < 0 || atendimentoMin < 0 ||
+        chegadaMax < chegadaMin || atendimentoMax < atendimentoMin) {
+        cout << "Parametros invalidos." << endl;
+        return 1;
     }
 
-    pthread_mutex_lock(&mutexFila);
-    simulando = false;
-    pthread_cond_signal(&clienteChegou);
-    pthread_mutex_unlock(&mutexFila);
+    inicio = chrono::steady_clock::now();
 
-    for (pthread_t t : threadsClientes) {
-        pthread_join(t, NULL);
+    pthread_create(&threadBarbeiro, nullptr, rotinaBarbeiro, nullptr);
+    pthread_create(&threadGerador, nullptr, rotinaGeradorClientes, nullptr);
+
+    while (!tempoEsgotado()) {
+        usleep(1000);
     }
 
-    pthread_join(threadBarbeiro, NULL);
+    pthread_mutex_lock(&mutexBarbearia);
+    simulacaoAtiva = false;
+    pthread_cond_broadcast(&condCliente);
+    pthread_mutex_unlock(&mutexBarbearia);
 
-    cout << endl;
-    cout << "================ RESUMO FINAL ================" << endl;
-    cout << "Clientes atendidos: " << clientesAtendidos << endl;
-    cout << "Clientes desistentes: " << clientesDesistentes << endl;
-    cout << "Clientes restantes na fila: " << filaClientes.size() << endl;
-    cout << "Total de clientes gerados: " << proximoCliente - 1 << endl;
-    cout << "==============================================" << endl;
+    pthread_join(threadGerador, nullptr);
+    pthread_join(threadBarbeiro, nullptr);
 
-    pthread_mutex_destroy(&mutexFila);
-    pthread_cond_destroy(&clienteChegou);
+    imprimirResumoFinal();
+
+    pthread_mutex_destroy(&mutexBarbearia);
+    pthread_cond_destroy(&condCliente);
 
     return 0;
 }
