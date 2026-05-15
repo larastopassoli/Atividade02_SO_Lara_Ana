@@ -284,26 +284,13 @@ void* rotinaGeradorClientes(void* arg) {
 
 // Exibe estatísticas finais da simulação
 void imprimirResumoFinal() {
-
     cout << endl;
-<<<<<<< HEAD
-    cout << "------------------------------------------------" << endl;
-    cout << " RESUMO FINAL:" << endl;
-=======
-
     cout << "================ RESUMO FINAL ================" << endl;
-
->>>>>>> 2946c6d9746bc063c155c884b26efa7a175d6302
     cout << "Clientes atendidos: " << clientesAtendidos << endl;
     cout << "Clientes desistentes: " << clientesDesistentes << endl;
     cout << "Clientes restantes na fila: " << filaClientes.size() << endl;
     cout << "Total de clientes gerados: " << totalClientesGerados << endl;
-<<<<<<< HEAD
-    cout << "------------------------------------------------" << endl;
-=======
-
     cout << "==============================================" << endl;
->>>>>>> 2946c6d9746bc063c155c884b26efa7a175d6302
 }
 
 int main() {
