@@ -358,3 +358,8 @@ int main() {
 
     return 0;
 }
+
+//compilar:
+//g++ barbeiro_dorminhoco.cpp -o barbeiro -pthread
+//executar:
+//./barbeiro
