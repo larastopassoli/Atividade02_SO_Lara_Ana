@@ -215,12 +215,13 @@ void* rotinaGeradorClientes(void* arg) {
 // Mostra resumo final
 void imprimirResumoFinal() {
     cout << endl;
-    cout << "================ RESUMO FINAL ================" << endl;
+    cout << "------------------------------------------------" << endl;
+    cout << " RESUMO FINAL:" << endl;
     cout << "Clientes atendidos: " << clientesAtendidos << endl;
     cout << "Clientes desistentes: " << clientesDesistentes << endl;
     cout << "Clientes restantes na fila: " << filaClientes.size() << endl;
     cout << "Total de clientes gerados: " << totalClientesGerados << endl;
-    cout << "==============================================" << endl;
+    cout << "------------------------------------------------" << endl;
 }
 
 int main() {
